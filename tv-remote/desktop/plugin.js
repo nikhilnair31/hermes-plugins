@@ -1,238 +1,215 @@
 /**
  * TV Remote - Fire TV controls in the desktop app statusbar.
  *
- * One chip: transport pill (⏯ − + ⏭ ▾). Clicking ▾ opens a centered
- * dialog (same pattern as the app's Context Usage popup) with playback
- * progress + the full remote. No separate pane.
- * All calls go through ctx.rest -> the plugin backend -> Home Assistant.
- * Theme vars only; no hardcoded colors.
+ * Chip: transport pill (⏯ - + ⏭ ▾). The ▾ handle opens an imperative DOM
+ * popout appended to document.body (escapes statusbar clipping), styled
+ * with theme vars. Progress polls the plugin backend every 5s while open.
  */
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  haptic,
-  host
-} from '@hermes/plugin-sdk'
-import { jsx, jsxs } from 'react/jsx-runtime'
-import { useCallback, useEffect, useState } from 'react'
+import { haptic, host } from '@hermes/plugin-sdk'
+import { jsx } from 'react/jsx-runtime'
+import { useEffect, useRef, useState } from 'react'
 
-const ID = 'tv-remote'
+const BASE = '/api/plugins/tv-remote'
 
-async function callRest(rest, path, opts) {
+async function api(path, opts) {
+  const res = await fetch(BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opts })
+  return res.json()
+}
+
+async function press(action) {
+  haptic('tap')
   try {
-    return await rest(path, opts)
+    const j = await api('/press', { method: 'POST', body: JSON.stringify({ action }) })
+    if (!j.ok) host.notify({ kind: 'error', message: j.error || 'TV command failed' })
   } catch {
     host.notify({ kind: 'error', message: 'TV backend unreachable' })
-    return { ok: false }
   }
 }
 
-function usePoll(ms, rest, path) {
-  const [s, setS] = useState(null)
-  useEffect(() => {
-    let dead = false
-    const tick = async () => {
-      const d = await callRest(rest, path)
-      if (!dead) setS(d)
-    }
-    tick()
-    const t = setInterval(tick, ms)
-    return () => { dead = true; clearInterval(t) }
-  }, [rest, path, ms])
-  return s
+function el(tag, cls, text) {
+  const n = document.createElement(tag)
+  if (cls) n.className = cls
+  if (text != null) n.textContent = text
+  return n
 }
 
-const BTN =
-  'inline-flex items-center justify-center h-9 min-w-11 px-2 rounded-md border border-(--ui-stroke-secondary) ' +
-  'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors'
+function buildPopout(rest, close) {
+  const card = el('div')
+  card.style.cssText = [
+    'position:fixed', 'z-index:99999', 'width:280px', 'padding:14px',
+    'display:flex', 'flex-direction:column', 'gap:10px', 'font-size:13px',
+    'border-radius:10px', 'border:1px solid var(--ui-stroke-secondary)',
+    'background:var(--ui-canvas-elevated,var(--ui-card,#1b1717))',
+    'color:var(--ui-text-secondary)', 'box-shadow:0 8px 28px rgba(0,0,0,.45)'
+  ].join(';')
 
-function padBtn(label, fn) {
-  return jsx('button', {
-    className: BTN + ' text-sm',
-    type: 'button',
-    onClick: fn,
-    children: label
-  })
-}
+  const stateLine = el('div', null, 'TV …')
+  stateLine.style.cssText = 'font-weight:500'
 
-function Row({ children }) {
-  return jsx('div', {
-    className: 'flex items-center justify-center gap-2',
-    children
-  })
-}
+  const prog = el('div')
+  prog.style.cssText = 'display:none;flex-direction:column;gap:6px'
+  const progTop = el('div')
+  progTop.style.cssText = 'display:flex;justify-content:space-between;font-size:11px;color:var(--ui-text-tertiary)'
+  const progTitle = el('span'); progTitle.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px'
+  const progPct = el('span')
+  progTop.append(progTitle, progPct)
+  const barOuter = el('div')
+  barOuter.style.cssText = 'height:6px;border-radius:99px;background:var(--ui-surface-secondary);overflow:hidden'
+  const barInner = el('div')
+  barInner.style.cssText = 'height:100%;background:var(--ui-accent);width:0%;transition:width .4s'
+  barOuter.append(barInner)
+  const progSub = el('div')
+  progSub.style.cssText = 'font-size:11px;color:var(--ui-text-quaternary)'
+  prog.append(progTop, barOuter, progSub)
 
-function fmt(sec) {
-  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
-}
-
-function RemoteDialog({ rest, open, onOpenChange }) {
-  const s = usePoll(4000, rest, '/state')
-  const p = usePoll(5000, rest, '/progress')
-  const [flags, setFlags] = useState({ powerAllow: false })
-
-  useEffect(() => {
-    if (open) rest('/flags').then(f => setFlags(f)).catch(() => {})
-  }, [rest, open])
-
-  const press = useCallback(async (action) => {
-    haptic('tap')
-    const j = await callRest(rest, '/press', { method: 'POST', body: { action } })
-    if (!j.ok) host.notify({ kind: 'error', message: j.error || 'TV command failed' })
-  }, [rest])
-
-  const togglePowerAllow = async () => {
-    const j = await callRest(rest, '/flags', { method: 'POST', body: { power: !flags.powerAllow } })
-    if (j.ok) setFlags({ powerAllow: j.powerAllow })
+  const mkBtn = (label, action) => {
+    const b = el('button', null, label)
+    b.style.cssText = [
+      'height:34px','min-width:44px','padding:0 10px','border-radius:8px',
+      'border:1px solid var(--ui-stroke-secondary)','background:transparent',
+      'color:var(--ui-text-secondary)','cursor:pointer','font-size:13px'
+    ].join(';')
+    b.onmouseenter = () => { b.style.background = 'var(--chrome-action-hover)' }
+    b.onmouseleave = () => { b.style.background = 'transparent' }
+    b.onclick = () => { haptic('tap'); press(action) }
+    return b
+  }
+  const row = (...btns) => {
+    const r = el('div')
+    r.style.cssText = 'display:flex;gap:8px;justify-content:center'
+    btns.forEach(b => r.append(b))
+    return r
   }
 
-  const doPower = async (action) => {
-    haptic('tap')
-    const j = await callRest(rest, '/power', { method: 'POST', body: { action } })
-    if (j.ok) host.notify({ kind: 'success', message: `TV plug ${action}` })
-    else host.notify({ kind: 'error', message: j.error || 'Power failed' })
+  const powerWrap = el('div')
+  powerWrap.style.cssText = 'display:none;flex-direction:column;gap:8px;border-top:1px solid var(--ui-stroke-secondary);padding-top:10px'
+  const powerLabel = el('label', null, 'Allow power toggle')
+  powerLabel.style.cssText = 'display:flex;gap:8px;align-items:center;font-size:11px;color:var(--ui-text-tertiary);cursor:pointer'
+  const powerCheck = el('input'); powerCheck.type = 'checkbox'
+  powerCheck.onchange = async () => {
+    await api('/flags', { method: 'POST', body: JSON.stringify({ power: powerCheck.checked }) })
+    row2.style.display = powerCheck.checked ? 'flex' : 'none'
+  }
+  powerLabel.append(powerCheck)
+  const row2 = el('div')
+  row2.style.cssText = 'display:none;gap:8px;justify-content:center'
+  const off = mkBtn('⏻ Off'); off.onclick = async () => { haptic('tap'); await api('/power', { method: 'POST', body: JSON.stringify({ action: 'off' }) }) }
+  const on = mkBtn('⏻ On'); on.onclick = async () => { haptic('tap'); await api('/power', { method: 'POST', body: JSON.stringify({ action: 'on' }) }) }
+  row2.append(off, on)
+  powerWrap.append(powerLabel, row2)
+
+  const footer = el('div', null, 'Back/Home/power go through ADB - the TV must be awake.')
+  footer.style.cssText = 'font-size:10px;color:var(--ui-text-quaternary)'
+
+  const btnRow1 = row(mkBtn('⏮', 'prev'), mkBtn('⏯', 'play_pause'), mkBtn('⏭', 'next'), mkBtn('⏹', 'stop'))
+  const btnRow2 = row(mkBtn('−', 'vol_down'), mkBtn('🔇', 'mute'), mkBtn('+', 'vol_up'))
+  const btnRow3 = row(mkBtn('↩ Back', 'back'), mkBtn('⌂ Home', 'home'))
+
+  card.append(stateLine, prog, btnRow1, btnRow2, btnRow3, powerWrap, footer)
+
+  let alive = true
+  const tick = async () => {
+    if (!alive) return
+    try {
+      const p = await api('/progress')
+      if (p && p.ok) {
+        stateLine.textContent = p.playing ? '▶ Playing' : p.paused ? '⏸ Paused' : '⏹ Idle'
+        if (p.title) { progTitle.textContent = p.title }
+        if (p.percent != null) {
+          prog.style.display = 'flex'
+          progPct.textContent = `${Math.round(p.percent)}%`
+          barInner.style.width = `${p.percent}%`
+          progSub.textContent = `${fmt(p.position_sec)}${p.duration_sec ? ' / ' + fmt(p.duration_sec) : ''}${p.remaining_min != null ? ' · ' + Math.round(p.remaining_min) + ' min left' : ''}`
+        }
+      } else {
+        stateLine.textContent = 'TV offline'
+      }
+    } catch { /* keep last */ }
+  }
+  const timer = setInterval(tick, 5000)
+  tick()
+
+  function fmt(sec) {
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`
   }
 
-  const st = s && !s.offline ? s.state : 'offline'
-  const stText = st === 'playing' ? '▶ Playing' : st === 'paused' ? '⏸ Paused' : st === 'offline' ? 'TV offline' : '⏹ Idle'
-
-  return jsxs(Dialog, {
-    open,
-    onOpenChange,
-    children: [
-      jsx(DialogHeader, {
-        children: jsx(DialogTitle, {
-          className: 'text-sm flex items-center justify-between w-full',
-          children: jsx('span', { children: stText })
-        })
-      }),
-
-      (p && p.ok && (p.playing || p.paused) && p.percent != null) && jsxs('div', {
-        className: 'flex flex-col gap-1.5 mb-1',
-        children: [
-          jsxs('div', {
-            className: 'flex items-center justify-between text-xs text-(--ui-text-tertiary)',
-            children: [
-              jsx('span', { className: 'truncate mr-2', children: p.title || 'playing' }),
-              jsx('span', { children: `${Math.round(p.percent)}%` })
-            ]
-          }),
-          jsx('div', {
-            className: 'h-1.5 rounded-full bg-(--ui-surface-secondary) overflow-hidden',
-            children: jsx('div', {
-              className: 'h-full bg-(--ui-accent) transition-all',
-              style: { width: `${p.percent}%` }
-            })
-          }),
-          jsxs('div', {
-            className: 'text-xs text-(--ui-text-quaternary)',
-            children: [
-              fmt(p.position_sec),
-              p.duration_sec ? ` / ${fmt(p.duration_sec)}` : '',
-              p.remaining_min != null ? ` · ${Math.round(p.remaining_min)} min left` : ''
-            ]
-          })
-        ]
-      }),
-
-      jsx(Row, {
-        children: [
-          padBtn('⏮', () => press('prev')),
-          padBtn('⏯', () => press('play_pause')),
-          padBtn('⏭', () => press('next')),
-          padBtn('⏹', () => press('stop'))
-        ]
-      }),
-      jsx(Row, {
-        children: [
-          padBtn('−', () => press('vol_down')),
-          padBtn('🔇', () => press('mute')),
-          padBtn('+', () => press('vol_up'))
-        ]
-      }),
-      jsx(Row, {
-        children: [
-          padBtn('↩ Back', () => press('back')),
-          padBtn('⌂ Home', () => press('home'))
-        ]
-      }),
-
-      jsxs('div', {
-        className:
-          'mt-1 pt-3 border-t border-(--ui-stroke-secondary) text-xs text-(--ui-text-tertiary)',
-        children: [
-          jsxs('label', {
-            className: 'flex items-center gap-2 cursor-pointer',
-            children: [
-              jsx('input', { type: 'checkbox', checked: !!flags.powerAllow, onChange: togglePowerAllow }),
-              'Allow power toggle'
-            ]
-          }),
-          flags.powerAllow && jsx('div', {
-            className: 'mt-2 flex gap-2 justify-center',
-            children: [
-              padBtn('⏻ Off', () => doPower('off')),
-              padBtn('⏻ On', () => doPower('on'))
-            ]
-          })
-        ]
-      }),
-
-      jsx('div', {
-        className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
-        children: 'Back/Home/power go through ADB - the TV must be awake.'
-      })
-    ]
-  })
+  return { card, close: () => { alive = false; clearInterval(timer); card.remove() } }
 }
 
 function PadChip({ rest }) {
-  const [open, setOpen] = useState(false)
+  const [pop, setPop] = useState(null)
+  const pillRef = useRef(null)
+
+  useEffect(() => () => { if (pop) pop.close() }, [pop])
+
+  const toggle = () => {
+    haptic('tap')
+    if (pop) { pop.close(); setPop(null); return }
+    const el = pillRef.current
+    const rect = el ? el.getBoundingClientRect() : { bottom: 48, right: window.innerWidth - 24 }
+    const p = buildPopout(rest, null)
+    p.card.style.top = (rect.bottom + 8) + 'px'
+    p.card.style.right = (window.innerWidth - rect.right) + 'px'
+    document.body.append(p.card)
+    const onDoc = (e) => { if (!p.card.contains(e.target) && el && !el.contains(e.target)) { p.close(); setPop(null) } }
+    setTimeout(() => document.addEventListener('mousedown', onDoc), 0)
+    p.card._onDoc = onDoc
+    setPop(p)
+  }
+
+  // cleanup outside-click listener when pop closes
+  useEffect(() => {
+    if (!pop) return
+    const origClose = pop.close
+    pop.close = () => { document.removeEventListener('mousedown', pop._onDoc); origClose() }
+  }, [pop])
+
   const act = (action) => () => {
     haptic('tap')
     rest('/press', { method: 'POST', body: { action } }).catch(() => {})
   }
 
-  return jsxs('span', {
+  return jsx('span', {
     className: 'inline-flex items-center',
-    children: [
-      jsx('span', {
-        className:
-          'inline-flex items-stretch rounded-full border border-(--ui-stroke-tertiary) ' +
-          'bg-(--ui-surface-secondary) overflow-hidden shadow-sm',
-        children: [
-          seg('⏯', 'play_pause', act),
-          seg('−', 'vol_down', act),
-          seg('+', 'vol_up', act),
-          seg('⏭', 'next', act),
-          jsx('button', {
-            className:
-              'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
-              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
-              'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
-            type: 'button',
-            title: 'TV remote - open controls',
-            onClick: () => { haptic('tap'); setOpen(true) },
-            children: '▾'
-          })
-        ]
-      }),
-      jsx(RemoteDialog, { rest, open, onOpenChange: setOpen })
-    ]
-  })
-}
-
-function seg(label, action, act) {
-  return jsx('button', {
-    className:
-      'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
-      'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
-      'transition-colors select-none',
-    type: 'button',
-    onClick: act(action),
-    children: label
+    children: jsx('span', {
+      ref: pillRef,
+      className:
+        'inline-flex items-stretch rounded-full border border-(--ui-stroke-tertiary) ' +
+        'bg-(--ui-surface-secondary) overflow-hidden shadow-sm',
+      children: [
+        jsx('button', {
+          className:
+            'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
+            'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none',
+          type: 'button', onClick: act('play_pause'), children: '⏯'
+        }),
+        jsx('button', {
+          className:
+            'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
+            'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none',
+          type: 'button', onClick: act('vol_down'), children: '−'
+        }),
+        jsx('button', {
+          className:
+            'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
+            'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none',
+          type: 'button', onClick: act('vol_up'), children: '+'
+        }),
+        jsx('button', {
+          className:
+            'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
+            'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none',
+          type: 'button', onClick: act('next'), children: '⏭'
+        }),
+        jsx('button', {
+          className:
+            'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
+            'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
+            'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
+          type: 'button', title: 'TV remote - open controls', onClick: toggle, children: '▾'
+        })
+      ]
+    })
   })
 }
 
