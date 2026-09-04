@@ -17,9 +17,6 @@ Picks a random photo from your local Immich library once per day and shows it in
 
 - Requires `IMMICH_API_KEY` in the dashboard env (`IMMICH_BASE_URL` defaults to `http://localhost:2283`).
 
-### cron-health
-Cron health chip: surfaces zombie/stale cron jobs straight from the gateway so silent failures get noticed.
-
 ## Install
 
 1. **Backend (dashboard plugin):** copy the plugin folder to `~/.hermes/plugins/<name>/` and add `<name>` to `plugins.enabled` in `~/.hermes/config.yaml`. Restart the dashboard.
