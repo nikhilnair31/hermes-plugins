@@ -174,7 +174,8 @@ function RemoteCard({ rest, onClose }) {
 
 function PadChip({ rest }) {
   const [open, setOpen] = useState(false)
-  const wrapRef = useRef(null)
+  const [rect, setRect] = useState(null)
+  const pillRef = useRef(null)
   const act = (action) => () => {
     haptic('tap')
     rest('/press', { method: 'POST', body: { action } }).catch(() => {})
@@ -184,17 +185,17 @@ function PadChip({ rest }) {
   useEffect(() => {
     if (!open) return
     const onDoc = (e) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false)
+      if (pillRef.current && !pillRef.current.contains(e.target)) setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [open])
 
   return jsxs('span', {
-    ref: wrapRef,
-    className: 'relative inline-flex items-center',
+    className: 'inline-flex items-center',
     children: [
       jsx('span', {
+        ref: pillRef,
         className:
           'inline-flex items-stretch rounded-full border border-(--ui-stroke-tertiary) ' +
           'bg-(--ui-surface-secondary) overflow-hidden shadow-sm',
@@ -210,20 +211,18 @@ function PadChip({ rest }) {
               'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
             type: 'button',
             title: 'TV remote - open controls',
-            onClick: () => { haptic('tap'); setOpen(o => !o) },
+            onClick: () => {
+              haptic('tap')
+              const el = pillRef.current
+              if (el) setRect(el.getBoundingClientRect())
+              setOpen(o => !o)
+            },
             children: open ? '▴' : '▾'
           })
         ]
       }),
-      open && jsx(RemotePop, { rest, onClose: () => setOpen(false) })
+      open && jsx(RemoteCard, { rest, onClose: () => setOpen(false), rect })
     ]
-  })
-}
-
-function RemotePop({ rest, onClose }) {
-  return jsx('div', {
-    onClick: (e) => e.stopPropagation(),
-    children: jsx(RemoteCard, { rest, onClose })
   })
 }
 
