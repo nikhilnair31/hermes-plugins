@@ -148,14 +148,18 @@ async def state() -> dict:
         "volume": attrs.get("volume_level"),
         "muted": attrs.get("is_volume_muted"),
     }
-    # HA lies 'idle' for apps that hide media metadata - cross-check via ADB
-    # dumps (read-only) when the integration shows idle/unknown.
+    # HA lies 'idle' for apps that hide media metadata - cross-check via the
+    # progress reader (read-only ADB dumps) when the integration shows idle.
     if out["state"] in ("idle", "unknown", "off", "standby"):
-        probe = _adb_playback()
-        if probe:
-            out["state"] = probe["state"] or out["state"]
-            out["app"] = probe["app"] or out["app"]
-            out["title"] = probe["title"] or out["title"]
+        try:
+            probe = _read_progress()
+        except Exception:  # noqa: BLE001
+            probe = None
+        if probe and probe.get("ok"):
+            out["state"] = ("playing" if probe.get("playing")
+                            else "paused" if probe.get("paused") else out["state"])
+            out["app"] = probe.get("app") or out["app"]
+            out["title"] = probe.get("title") or out["title"]
             out["via_adb"] = True
     return out
 
