@@ -171,8 +171,7 @@ function CronChip({ ctx }) {
                         )
                       )
                     })
-                })
-              }),
+                }),
               jsx(DialogFooter, {
                 children: jsx('div', {
                   className: 'flex items-center justify-end gap-1.5',
