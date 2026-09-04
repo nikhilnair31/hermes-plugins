@@ -1,0 +1,7 @@
+{
+  "name": "cron-health",
+  "label": "Cron Health",
+  "description": "Status bar chip: cron job failures and stale jobs at a glance.",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}

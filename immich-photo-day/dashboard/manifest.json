@@ -1,0 +1,7 @@
+{
+  "name": "immich-photo-day",
+  "label": "Immich Photo of the Day",
+  "description": "Picks a random photo from Immich each day.",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}

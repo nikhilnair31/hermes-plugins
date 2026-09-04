@@ -1,0 +1,7 @@
+{
+  "name": "tv-remote",
+  "label": "TV Remote",
+  "description": "Fire TV remote controls in the desktop app: play/pause, volume, next/prev, back/home, app launch, power.",
+  "version": "0.1.0",
+  "api": "plugin_api.py"
+}
