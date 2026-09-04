@@ -322,18 +322,9 @@ async def press(body: PressBody) -> dict:
     if action in ("back", "home"):
         return _adb_keyevent(ADB_KEY[action])
 
-    # Volume: ADB keyevents (deterministic on this TV).
+    # Volume + mute: ADB keyevents (HA's volume_mute service 500s on Fire TV;
+    # keycode 164 toggles mute on the TV itself).
     if action in ("vol_up", "vol_down", "mute"):
-        if action == "mute":
-            status, data = _ha(f"/api/states/{FIRETV_ENTITY}", timeout=8)
-            if status != 200:
-                return {"ok": False, "error": f"HA returned {status}"}
-            muted = bool(data.get("attributes", {}).get("is_volume_muted"))
-            payload = {"entity_id": FIRETV_ENTITY, "is_volume_muted": not muted}
-            s2, d2 = _ha("/api/services/media_player/volume_mute", payload, timeout=10)
-            d2err = d2.get("error") if isinstance(d2, dict) else None
-            return {"ok": s2 == 200 and not d2err, "muted": not muted,
-                    **({"error": str(d2err)} if d2err else {})}
         return _adb_keyevent(ADB_KEY[action])
 
     # Transport: HA media services (integration maps them to adb keys itself).
