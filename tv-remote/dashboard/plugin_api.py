@@ -3,9 +3,13 @@
 Proxies Home Assistant media_player services for the living-room Fire TV.
 Mounted at /api/plugins/tv-remote/ by the Hermes dashboard.
 
-Scope (v1): transport keys (play/pause, stop, volume, mute, next, prev),
-Back/Home via ADB keyevents, and a power toggle on switch.tv_plug that
-stays disabled until explicitly enabled in the pane.
+Scope (v2): transport keys (play/pause, stop, volume, mute, next, prev),
+Back/Home via ADB keyevents, a power toggle on switch.tv_plug (gated),
+and a playback-progress sensor: live position is computed with the
+Android playback math (position_at_last_event + speed * elapsed since
+`updated`), duration is resolved from the video title via yt-dlp, and
+the result is exposed as a percent + label for the desktop UI and for
+Home Assistant command_line sensors.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -28,6 +34,8 @@ router = APIRouter()
 HASS_URL = os.environ.get("HASS_URL", "http://100.124.34.102:8123")
 FIRETV_ENTITY = os.environ.get("FIRETV_ENTITY", "media_player.fire_tv")
 TV_PLUG_ENTITY = os.environ.get("TV_PLUG_ENTITY", "switch.tv_plug")
+ADB_HOST = os.environ.get("FIRETV_ADB_HOST", "192.168.1.186:5555")
+YTDLP_BIN = os.environ.get("YTDLP_BIN", "/home/nikhil/.local/bin/yt-dlp")
 STATE_FILE = Path(__file__).resolve().parent.parent / "tv-remote-state.json"
 
 
@@ -82,19 +90,16 @@ def _ha_call_service(service: str, payload: dict) -> tuple[int, Any]:
     return _ha(f"/api/services/media_player/{service}", payload, timeout=15)
 
 
-# --- models (all defined before the routes that use them) ----------------
-
-
-class PressBody(BaseModel):
-    action: str
-
-
-class PowerBody(BaseModel):
-    action: str
-
-
-class AllowBody(BaseModel):
-    power: bool | None = None
+def _adb_shell(command: str, timeout: int = 8) -> str:
+    """Read-only ADB dump through the server's own adb (no key presses)."""
+    try:
+        out = subprocess.run(
+            ["adb", "-s", ADB_HOST, "shell", command],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        return out.stdout or ""
+    except Exception:  # noqa: BLE001 - probing must never raise
+        return ""
 
 
 # --- flags ---------------------------------------------------------------
@@ -129,83 +134,15 @@ async def set_flags(body: dict) -> dict:
 # --- state ---------------------------------------------------------------
 
 
-_ADB_HOST = os.environ.get("FIRETV_ADB_HOST", "192.168.1.186:5555")
-_STATE_CACHE: dict = {"at": 0.0, "data": None}
-
-
-def _adb_shell(command: str, timeout: int = 8) -> str:
-    """Read-only ADB dump through the server's own adb (no key presses)."""
-    import subprocess
-
-    try:
-        out = subprocess.run(
-            ["adb", "-s", _ADB_HOST, "shell", command],
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return out.stdout or ""
-    except Exception:  # noqa: BLE001 - fallback probing must never raise
-        return ""
-
-
-def _adb_playback() -> dict | None:
-    """Truth HA can't see: focused app + media session playback state.
-
-    HA's androidtv integration reports 'idle' for apps that hide their
-    metadata; dumpsys always knows. Read-only (dumpsys only).
-    """
-    focus = _adb_shell("dumpsys window | grep mCurrentFocus")
-    sess = _adb_shell("dumpsys media_session")
-    if not focus and not sess:
-        return None
-
-    app = ""
-    m = re.search(r"u0\s+([\w.]+)/", focus)
-    if m:
-        app = m.group(1)
-
-    state, position = "", ""
-    m = re.search(r"state=PlaybackState \{state=(\d+)", sess)
-    if m:
-        code = int(m.group(1))
-        state = {0: "stopped", 1: "stopped", 2: "stopped", 3: "playing",
-                 4: "stopped", 5: "stopped", 6: "stopped", 7: "stopped",
-                 8: "paused", 9: "stopped", 10: "stopped", 11: "stopped"}.get(
-                    code, "")
-        pm = re.search(r"position=(\d+)", sess)
-        if pm:
-            position = pm.group(1)
-
-    title = ""
-    mt = re.search(r"metadata:.*?description=([^,\n]+)", sess)
-    if mt:
-        title = mt.group(1).strip()
-        if title.lower() in ("null", "none", ""):
-            title = ""
-
-    if not state and not app:
-        return None
-    return {"state": state or "playing" if position else state or "idle",
-            "app": app, "title": title}
-
-
 @router.get("/state")
 async def state() -> dict:
-    import time as _time
-
-    now = _time.time()
-    if _STATE_CACHE["data"] and now - _STATE_CACHE["at"] < 10:
-        return _STATE_CACHE["data"]
-
     status, data = _ha(f"/api/states/{FIRETV_ENTITY}", timeout=8)
     if status != 200 or not isinstance(data, dict) or "entity_id" not in data:
-        result = {"ok": False, "offline": True, "status": status}
-        _STATE_CACHE.update(at=now, data=result)
-        return result
+        return {"ok": False, "offline": True, "status": status}
     attrs = data.get("attributes", {})
-    st = data.get("state", "unknown")
     out = {
         "ok": True,
-        "state": st,
+        "state": data.get("state", "unknown"),
         "app": attrs.get("app_name") or attrs.get("app_id") or "",
         "title": attrs.get("media_title") or "",
         "volume": attrs.get("volume_level"),
@@ -213,23 +150,17 @@ async def state() -> dict:
     }
     # HA lies 'idle' for apps that hide media metadata - cross-check via ADB
     # dumps (read-only) when the integration shows idle/unknown.
-    if st in ("idle", "unknown", "off", "standby"):
+    if out["state"] in ("idle", "unknown", "off", "standby"):
         probe = _adb_playback()
         if probe:
             out["state"] = probe["state"] or out["state"]
             out["app"] = probe["app"] or out["app"]
             out["title"] = probe["title"] or out["title"]
             out["via_adb"] = True
-    _STATE_CACHE.update(at=now, data=out)
     return out
 
 
-# --- transport keys (always allowed) -------------------------------------
-
-
-class PressBody(BaseModel):
-    action: str
-
+# --- playback progress (ADB dumps + yt-dlp duration) ----------------------
 
 ADB_KEY = {
     # Android KEYCODEs - deterministic on Fire TV (verified in fire-tv-control skill)
@@ -252,6 +183,135 @@ MEDIA_SERVICES = {
     "prev": "media_previous_track",
     "stop": "media_stop",
 }
+
+
+class PressBody(BaseModel):
+    action: str
+
+
+_PROG_CACHE: dict = {"at": 0.0, "data": None}
+_DUR_CACHE: dict = {}
+_PROG_TTL = 4.0  # seconds - the desktop chip polls every 5s
+
+
+def _parse_time_hms(text: str) -> int | None:
+    """'17:29' or '1:02:33' -> seconds."""
+    parts = text.strip().split(":")
+    if not all(p.isdigit() for p in parts):
+        return None
+    secs = 0
+    for p in parts:
+        secs = secs * 60 + int(p)
+    return secs
+
+
+def _resolve_duration(title: str, channel: str) -> int | None:
+    """Resolve video duration via yt-dlp title search. Cached per title."""
+    if not title:
+        return None
+    key = f"{title}|{channel}"
+    if key in _DUR_CACHE:
+        return _DUR_CACHE[key]
+    try:
+        out = subprocess.run(
+            [YTDLP_BIN, "--no-warnings", "--flat-playlist", "--get-duration",
+             f"ytsearch1:{title} {channel}".strip()],
+            capture_output=True, text=True, timeout=25,
+        )
+        dur = _parse_time_hms((out.stdout or "").strip().splitlines()[-1]) if out.stdout.strip() else None
+    except Exception:  # noqa: BLE001
+        dur = None
+    _DUR_CACHE[key] = dur if dur else None
+    return _DUR_CACHE[key]
+
+
+def _read_progress() -> dict:
+    """One read-only ADB round trip -> live playback percent.
+
+    live position = position_at_last_event + speed * (uptime - updated)
+    (Android's own formula; SmartTube updates `position` only on
+    pause/seek/play events, so we advance it ourselves).
+    """
+    up_out = _adb_shell("cat /proc/uptime")
+    sess = _adb_shell("dumpsys media_session")
+    if not sess:
+        return {"ok": False}
+
+    uptime_ms = None
+    m = re.search(r"([\d.]+)\s+", up_out)
+    if m:
+        uptime_ms = int(float(m.group(1)) * 1000)
+
+    app = ""
+    mf = re.search(r"mCurrentFocus=Window\{[^\n]*u0\s+([\w.]+)/", _adb_shell("dumpsys window | grep mCurrentFocus"))
+    if mf:
+        app = mf.group(1)
+
+    # take the ACTIVE session (SmartTube marks itself active=true)
+    block = ""
+    m = re.search(r"package=org\.smarttube[\s\S]*?(?=\n    \w|\nAudio playback|$)", sess)
+    if m:
+        block = m.group(0)
+
+    state_code, position, updated, speed = None, None, None, 1.0
+    m = re.search(r"state=PlaybackState \{state=(\d+), position=(\d+), buffered position=\d+, speed=([\d.]+), updated=(\d+)", block or sess)
+    if m:
+        state_code = int(m.group(1))
+        position = int(m.group(2))
+        speed = float(m.group(3))
+        updated = int(m.group(4))
+
+    title = channel = ""
+    m = re.search(r"metadata: size=\d+, description=([^,\n]*),\s*([^,\n]*),\s*([^,\n]*)", block or sess)
+    if m:
+        title = m.group(1).strip()
+        channel = m.group(2).strip()
+        for bad in ("null", ""):
+            if title.lower() == bad:
+                title = ""
+            if channel.lower() == bad:
+                channel = ""
+
+    if state_code is None:
+        return {"ok": False}
+
+    playing = state_code == 3
+    paused = state_code == 8
+    live_ms = position or 0
+    if playing and speed and uptime_ms and updated:
+        live_ms += int(speed * max(0, uptime_ms - updated))
+
+    dur = _resolve_duration(title, channel)
+    percent = None
+    if dur:
+        percent = max(0.0, min(100.0, live_ms / 1000 / dur * 100))
+
+    return {
+        "ok": True,
+        "playing": playing,
+        "paused": paused,
+        "state_code": state_code,
+        "app": app,
+        "title": title or None,
+        "channel": channel or None,
+        "position_sec": int(live_ms / 1000),
+        "duration_sec": dur,
+        "percent": round(percent, 1) if percent is not None else None,
+        "remaining_min": round((dur - live_ms / 1000) / 60, 1) if dur else None,
+    }
+
+
+@router.get("/progress")
+async def progress() -> dict:
+    now = time.time()
+    if _PROG_CACHE["data"] and now - _PROG_CACHE["at"] < _PROG_TTL:
+        return _PROG_CACHE["data"]
+    try:
+        out = _read_progress()
+    except Exception as exc:  # noqa: BLE001
+        out = {"ok": False, "error": str(exc)[:120]}
+    _PROG_CACHE.update(at=now, data=out)
+    return out
 
 
 @router.post("/press")
@@ -299,6 +359,10 @@ def _adb_keyevent(keycode: int) -> dict:
 
 
 # --- power (gated) -------------------------------------------------------
+
+
+class PowerBody(BaseModel):
+    action: str
 
 
 @router.post("/power")

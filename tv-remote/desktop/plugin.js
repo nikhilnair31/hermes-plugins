@@ -103,8 +103,28 @@ function seg(label, action, act) {
   })
 }
 
+function useProgress(rest, ms) {
+  const [p, setP] = useState(null)
+  useEffect(() => {
+    let dead = false
+    const tick = async () => {
+      try {
+        const d = await rest('/progress')
+        if (!dead) setP(d)
+      } catch {
+        if (!dead) setP({ ok: false })
+      }
+    }
+    tick()
+    const t = setInterval(tick, ms)
+    return () => { dead = true; clearInterval(t) }
+  }, [rest, ms])
+  return p
+}
+
 function RemotePane({ rest }) {
   const s = usePluginState(rest, 4000)
+  const p = useProgress(rest, 5000)
   const [flags, setFlags] = useState({ powerAllow: false })
   const [busy, setBusy] = useState(false)
 
@@ -185,6 +205,32 @@ function RemotePane({ rest }) {
           s && s.app ? ` · ${s.app}` : ''
         ]
       }),
+
+      (p && p.ok && p.percent != null)
+        ? jsxs('div', {
+            className: 'flex flex-col gap-1',
+            children: [
+              jsxs('div', {
+                className: 'flex items-center justify-between text-xs text-(--ui-text-tertiary)',
+                children: [
+                  jsx('span', { className: 'truncate max-w-[150px]', children: p.title || 'playing' }),
+                  jsx('span', { children: `${Math.round(p.percent)}%` })
+                ]
+              }),
+              jsx('div', {
+                className: 'h-1 rounded-full bg-(--ui-surface-secondary) overflow-hidden',
+                children: jsx('div', {
+                  className: 'h-full bg-(--ui-accent) transition-all',
+                  style: { width: `${p.percent}%` }
+                })
+              }),
+              jsx('div', {
+                className: 'text-xs text-(--ui-text-quaternary)',
+                children: `${Math.floor(p.position_sec / 60)}:${String(p.position_sec % 60).padStart(2, '0')} / ${p.duration_sec ? `${Math.floor(p.duration_sec / 60)}:${String(p.duration_sec % 60).padStart(2, '0')}` : '—'} · ${p.remaining_min != null ? `${Math.round(p.remaining_min)} min left` : ''}`
+              })
+            ]
+          })
+        : null,
 
       jsxs('div', {
         className:
