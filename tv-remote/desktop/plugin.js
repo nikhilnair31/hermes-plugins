@@ -58,7 +58,7 @@ function Row({ children }) {
 
 // ---- the popout card -----------------------------------------------------
 
-function RemoteCard({ rest, onClose }) {
+function RemoteCard({ rest, onClose, rect }) {
   const s = usePoll(4000, rest, '/state')
   const p = usePoll(5000, rest, '/progress')
   const [flags, setFlags] = useState({ powerAllow: false })
@@ -89,9 +89,16 @@ function RemoteCard({ rest, onClose }) {
   const stText = st === 'playing' ? '▶ Playing' : st === 'paused' ? '⏸ Paused' : '⏹ Idle'
 
   return jsxs('div', {
+    onClick: (e) => e.stopPropagation(),
+    style: {
+      position: 'fixed',
+      top: ((rect ? rect.bottom : 48) + 6) + 'px',
+      right: (window.innerWidth - (rect ? rect.right : 24)) + 'px',
+      zIndex: 9999
+    },
     className:
-      'absolute right-0 top-full mt-1 z-50 w-64 flex flex-col gap-2.5 p-3 text-sm ' +
-      'rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-card) shadow-lg',
+      'w-64 flex flex-col gap-2.5 p-3 text-sm ' +
+      'rounded-lg border border-(--ui-stroke-secondary) bg-(--ui-canvas-elevated) shadow-lg',
     children: [
       jsx('div', { className: 'text-xs font-medium', children: stText }),
 
