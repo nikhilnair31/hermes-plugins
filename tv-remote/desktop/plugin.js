@@ -134,11 +134,15 @@ function TvChip({ ctx }) {
               prog && prog.ok && (prog.playing || prog.paused) && jsxs('div', {
                 className: 'flex flex-col gap-1.5',
                 children: [
+                  prog.title ? jsx('div', {
+                    className: 'truncate text-xs text-(--ui-text-tertiary)',
+                    children: prog.title
+                  }) : null,
                   jsxs('div', {
                     className: 'flex items-center justify-between text-xs text-(--ui-text-tertiary)',
                     children: [
-                      jsx('span', { className: 'truncate mr-2', children: prog.title || 'playing' }),
-                      jsx('span', { children: prog.percent != null ? `${Math.round(prog.percent)}%` : '—' })
+                      jsx('span', { children: prog.percent != null ? `${Math.round(prog.percent)}% complete` : 'elapsed' }),
+                      jsx('span', { children: prog.remaining_min != null ? `${Math.round(prog.remaining_min)} min left` : '' })
                     ]
                   }),
                   jsx('div', {
@@ -148,13 +152,9 @@ function TvChip({ ctx }) {
                       style: { width: `${prog.percent || 0}%` }
                     })
                   }),
-                  jsxs('div', {
+                  jsx('div', {
                     className: 'text-xs text-(--ui-text-quaternary)',
-                    children: [
-                      fmt(prog.position_sec),
-                      prog.duration_sec ? ` / ${fmt(prog.duration_sec)}` : '',
-                      prog.remaining_min != null ? ` · ${Math.round(prog.remaining_min)} min left` : ''
-                    ]
+                    children: fmt(prog.position_sec) + (prog.duration_sec ? ` / ${fmt(prog.duration_sec)}` : ' · length unknown')
                   })
                 ]
               }),
