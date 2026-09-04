@@ -206,7 +206,7 @@ function RemotePane({ rest }) {
         ]
       }),
 
-      (p && p.ok && p.percent != null)
+      (p && p.ok && (p.playing || p.paused) && p.percent != null)
         ? jsxs('div', {
             className: 'flex flex-col gap-1',
             children: [
