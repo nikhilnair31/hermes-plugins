@@ -229,6 +229,47 @@ def _resolve_duration(title: str, channel: str) -> int | None:
     return _DUR_CACHE[key]
 
 
+_OCR_DUR_CACHE: dict = {}
+
+
+def _ocr_duration_probe() -> int | None:
+    """Read 'm:ss / m:ss' off SmartTube's controls overlay.
+
+    CENTER flashes the controls (without pausing), screencap + tesseract read
+    the time text. Cached by progress signature so keypresses stay rare.
+    Requires the user's one-time approval (given Sep 4 2026)."""
+    def sh(cmd, timeout=15):
+        return subprocess.run(
+            ["adb", "-s", ADB_HOST, "shell", cmd],
+            capture_output=True, text=True, timeout=timeout).stdout
+
+    try:
+        sh("input keyevent 23")
+        time.sleep(1.5)
+        cap = subprocess.run(
+            ["adb", "-s", ADB_HOST, "exec-out", "screencap", "-p"],
+            capture_output=True, timeout=25)
+        png = "/tmp/tv_ocr.png"
+        with open(png, "wb") as f:
+            f.write(cap.stdout)
+        text = subprocess.run(
+            ["tesseract", png, "-", "--psm", "11"],
+            capture_output=True, text=True, timeout=30).stdout
+        sh("input keyevent 23")
+        m = re.search(r"(\d{1,2}:[0-5]\d)\s*/\s*(\d{1,2}:[0-5]\d)", text)
+        if not m:
+            return None
+        def hms(t):
+            parts = [int(x) for x in t.split(":")]
+            s = 0
+            for p in parts:
+                s = s * 60 + p
+            return s
+        return hms(m.group(2))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _read_progress() -> dict:
     """One read-only ADB round trip -> live playback percent.
 
@@ -286,6 +327,15 @@ def _read_progress() -> dict:
         live_ms += int(speed * max(0, uptime_ms - updated))
 
     dur = _resolve_duration(title, channel)
+    if dur is None and playing:
+        # SmartTube hides metadata for some videos - read duration off the
+        # controls overlay via OCR (cached 10 min per rounded position).
+        sig = (title or "") + "|" + str((position or 0) // 30)
+        if sig in _OCR_DUR_CACHE and time.time() - _OCR_DUR_CACHE[sig][0] < 600:
+            dur = _OCR_DUR_CACHE[sig][1]
+        else:
+            dur = _ocr_duration_probe()
+            _OCR_DUR_CACHE[sig] = (time.time(), dur)
     percent = None
     if dur:
         percent = max(0.0, min(100.0, live_ms / 1000 / dur * 100))
