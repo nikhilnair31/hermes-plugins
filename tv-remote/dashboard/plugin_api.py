@@ -230,6 +230,7 @@ def _resolve_duration(title: str, channel: str) -> int | None:
 
 
 _OCR_DUR_CACHE: dict = {}
+_PROBE_STATE: dict = {"last": 0.0, "attempts": 0}
 
 
 def _ocr_duration_probe() -> int | None:
@@ -328,14 +329,29 @@ def _read_progress() -> dict:
 
     dur = _resolve_duration(title, channel)
     if dur is None and playing:
-        # SmartTube hides metadata for some videos - read duration off the
-        # controls overlay via OCR (cached 10 min per rounded position).
+        # SmartTube hides metadata for some videos. The OCR probe flashes the
+        # TV controls (visible flicker), so it runs AT MOST ONCE per video:
+        # keyed by the playback session (position resets when a new video
+        # starts), globally rate-limited, and capped at 3 attempts.
         sig = (title or "") + "|" + str((position or 0) // 30)
-        if sig in _OCR_DUR_CACHE and time.time() - _OCR_DUR_CACHE[sig][0] < 600:
-            dur = _OCR_DUR_CACHE[sig][1]
+        entry = _OCR_DUR_CACHE.get(sig)
+        if entry is not None:
+            dur = entry[1]  # may be None after 3 failed attempts (gave up)
         else:
-            dur = _ocr_duration_probe()
-            _OCR_DUR_CACHE[sig] = (time.time(), dur)
+            now = time.time()
+            if now - _PROBE_STATE.get("last", 0) < 60:
+                dur = None  # rate limit: one probe per minute max, globally
+            else:
+                _PROBE_STATE["last"] = now
+                attempts = _PROBE_STATE.get("attempts", 0) + 1
+                _PROBE_STATE["attempts"] = attempts
+                if attempts > 3:
+                    _OCR_DUR_CACHE[sig] = (now, None)  # give up for this video
+                else:
+                    dur = _ocr_duration_probe()
+                    if dur:
+                        _PROBE_STATE["attempts"] = 0
+                        _OCR_DUR_CACHE[sig] = (now, dur)
     percent = None
     if dur:
         percent = max(0.0, min(100.0, live_ms / 1000 / dur * 100))
