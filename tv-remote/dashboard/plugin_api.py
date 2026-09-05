@@ -229,48 +229,6 @@ def _resolve_duration(title: str, channel: str) -> int | None:
     return _DUR_CACHE[key]
 
 
-_OCR_DUR_CACHE: dict = {}
-_PROBE_STATE: dict = {"last": 0.0, "attempts": 0}
-
-
-def _ocr_duration_probe() -> int | None:
-    """Read 'm:ss / m:ss' off SmartTube's controls overlay.
-
-    CENTER flashes the controls (without pausing), screencap + tesseract read
-    the time text. Cached by progress signature so keypresses stay rare.
-    Requires the user's one-time approval (given Sep 4 2026)."""
-    def sh(cmd, timeout=15):
-        return subprocess.run(
-            ["adb", "-s", ADB_HOST, "shell", cmd],
-            capture_output=True, text=True, timeout=timeout).stdout
-
-    try:
-        sh("input keyevent 23")
-        time.sleep(1.5)
-        cap = subprocess.run(
-            ["adb", "-s", ADB_HOST, "exec-out", "screencap", "-p"],
-            capture_output=True, timeout=25)
-        png = "/tmp/tv_ocr.png"
-        with open(png, "wb") as f:
-            f.write(cap.stdout)
-        text = subprocess.run(
-            ["tesseract", png, "-", "--psm", "11"],
-            capture_output=True, text=True, timeout=30).stdout
-        sh("input keyevent 23")
-        m = re.search(r"(\d{1,2}:[0-5]\d)\s*/\s*(\d{1,2}:[0-5]\d)", text)
-        if not m:
-            return None
-        def hms(t):
-            parts = [int(x) for x in t.split(":")]
-            s = 0
-            for p in parts:
-                s = s * 60 + p
-            return s
-        return hms(m.group(2))
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _read_progress() -> dict:
     """One read-only ADB round trip -> live playback percent.
 
@@ -328,30 +286,6 @@ def _read_progress() -> dict:
         live_ms += int(speed * max(0, uptime_ms - updated))
 
     dur = _resolve_duration(title, channel)
-    if dur is None and playing:
-        # SmartTube hides metadata for some videos. The OCR probe flashes the
-        # TV controls (visible flicker), so it runs AT MOST ONCE per video:
-        # keyed by the playback session (position resets when a new video
-        # starts), globally rate-limited, and capped at 3 attempts.
-        sig = (title or "") + "|" + str((position or 0) // 30)
-        entry = _OCR_DUR_CACHE.get(sig)
-        if entry is not None:
-            dur = entry[1]  # may be None after 3 failed attempts (gave up)
-        else:
-            now = time.time()
-            if now - _PROBE_STATE.get("last", 0) < 60:
-                dur = None  # rate limit: one probe per minute max, globally
-            else:
-                _PROBE_STATE["last"] = now
-                attempts = _PROBE_STATE.get("attempts", 0) + 1
-                _PROBE_STATE["attempts"] = attempts
-                if attempts > 3:
-                    _OCR_DUR_CACHE[sig] = (now, None)  # give up for this video
-                else:
-                    dur = _ocr_duration_probe()
-                    if dur:
-                        _PROBE_STATE["attempts"] = 0
-                        _OCR_DUR_CACHE[sig] = (now, dur)
     percent = None
     if dur:
         percent = max(0.0, min(100.0, live_ms / 1000 / dur * 100))
