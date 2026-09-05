@@ -229,6 +229,44 @@ def _resolve_duration(title: str, channel: str) -> int | None:
     return _DUR_CACHE[key]
 
 
+CAST_STATE = "/home/nikhil/Projects/firetv-cast/now_playing.json"
+
+
+def _casted_video_id() -> str | None:
+    """Video ID of the last video casted via Ctrl+Shift+A (firetv-cast)."""
+    try:
+        import json as _json
+        st = _json.load(open(CAST_STATE))
+        # stale if casted more than 24h ago
+        import time as _t
+        if _t.time() - st.get("casted_at", 0) > 86400:
+            return None
+        return st.get("video_id")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _resolve_duration_by_id(vid: str) -> int | None:
+    """Exact duration via yt-dlp from the video ID. Cached forever per ID."""
+    if not vid:
+        return None
+    key = f"id:{vid}"
+    if key in _DUR_CACHE:
+        return _DUR_CACHE[key]
+    try:
+        out = subprocess.run(
+            [YTDLP_BIN, "--no-warnings", "--flat-playlist", "--print", "%(duration)s",
+             f"https://www.youtube.com/watch?v={vid}"],
+            capture_output=True, text=True, timeout=25,
+        )
+        val = (out.stdout or "").strip().splitlines()
+        dur = int(float(val[-1])) if val and val[-1] not in ("", "NA", "None") else None
+    except Exception:  # noqa: BLE001
+        dur = None
+    _DUR_CACHE[key] = dur
+    return dur
+
+
 def _read_progress() -> dict:
     """One read-only ADB round trip -> live playback percent.
 
@@ -286,6 +324,10 @@ def _read_progress() -> dict:
         live_ms += int(speed * max(0, uptime_ms - updated))
 
     dur = _resolve_duration(title, channel)
+    if dur is None:
+        # casted via Ctrl+Shift+A? firetv-cast recorded the video ID - exact
+        # duration from yt-dlp, no TV interaction at all.
+        dur = _resolve_duration_by_id(_casted_video_id())
     percent = None
     if dur:
         percent = max(0.0, min(100.0, live_ms / 1000 / dur * 100))
