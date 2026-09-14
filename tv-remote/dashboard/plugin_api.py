@@ -3,8 +3,9 @@
 Proxies Home Assistant media_player services for the living-room Fire TV.
 Mounted at /api/plugins/tv-remote/ by the Hermes dashboard.
 
-Scope (v2): transport keys (play/pause, stop, volume, mute, next, prev),
-Back/Home via ADB keyevents, a power toggle on switch.tv_plug (gated),
+Scope (v3): transport keys (play/pause, stop, volume, mute, next, prev),
+Back/Home via ADB keyevents, power on/off (standby via the HA media_player,
+wake via MENU + HOME ADB keyevents - the sequence verified on this TV),
 and a playback-progress sensor: live position is computed with the
 Android playback math (position_at_last_event + speed * elapsed since
 `updated`), duration is resolved from the video title via yt-dlp, and
@@ -14,10 +15,12 @@ Home Assistant command_line sensors.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+import socket
 import subprocess
 import time
 import urllib.request
@@ -33,7 +36,7 @@ router = APIRouter()
 
 HASS_URL = os.environ.get("HASS_URL", "http://100.124.34.102:8123")
 FIRETV_ENTITY = os.environ.get("FIRETV_ENTITY", "media_player.fire_tv")
-TV_PLUG_ENTITY = os.environ.get("TV_PLUG_ENTITY", "switch.tv_plug")
+TV_PLUG_ENTITY = os.environ.get("TV_PLUG_ENTITY", "switch.tv_plug")  # hard-cut lever; /power does not use it
 ADB_HOST = os.environ.get("FIRETV_ADB_HOST", "192.168.1.186:5555")
 YTDLP_BIN = os.environ.get("YTDLP_BIN", "/home/nikhil/.local/bin/yt-dlp")
 STATE_FILE = Path(__file__).resolve().parent.parent / "tv-remote-state.json"
@@ -395,21 +398,111 @@ def _adb_keyevent(keycode: int) -> dict:
     return {"ok": True, "response": resp[:200]}
 
 
-# --- power (gated) -------------------------------------------------------
+# --- power ---------------------------------------------------------------
+# OFF = graceful standby through the HA androidtv integration - the exact
+# call the HA card's power button makes (`input keyevent 224 && input
+# keyevent 223`). ON = MENU then HOME ADB keyevents, the wake sequence
+# verified on this TV (plain POWER/WAKEUP keyevents do NOT wake it). The
+# hard-cut plug stays a manual emergency lever - /power never touches it.
 
 
 class PowerBody(BaseModel):
-    action: str
+    action: str = "toggle"
+    dry_run: bool = False
+
+
+def _power_direction(state: str) -> str:
+    """Which way a toggle should go, from the HA media_player state."""
+    return "on" if state in ("off", "standby", "unavailable", "unknown", "") else "off"
+
+
+def _tcp_open(timeout: float = 2.5) -> bool:
+    """TCP probe of the TV's ADB port - ground truth for reachability."""
+    host, _, port = ADB_HOST.partition(":")
+    try:
+        with socket.create_connection((host, int(port or 5555)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _wakefulness() -> str:
+    out = _adb_shell("dumpsys power | grep mWakefulness=", timeout=6)
+    m = re.search(r"mWakefulness=(\w+)", out or "")
+    return m.group(1) if m else ""
+
+
+def _adb_direct(args: list[str], timeout: int = 12) -> bool:
+    """One adb command straight at the TV, re-connecting once if needed."""
+    for attempt in (1, 2):
+        try:
+            proc = subprocess.run(
+                ["adb", "-s", ADB_HOST, *args], capture_output=True, text=True, timeout=timeout
+            )
+            if proc.returncode == 0 and "error" not in (proc.stdout or "").lower():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        if attempt == 1:
+            try:
+                subprocess.run(["adb", "connect", ADB_HOST], capture_output=True, text=True, timeout=8)
+            except Exception:  # noqa: BLE001
+                pass
+    return False
+
+
+async def _wake_tv() -> dict:
+    """Wake a sleeping TV: connect if needed, then MENU + HOME."""
+    if not _tcp_open():
+        try:
+            subprocess.run(["adb", "connect", ADB_HOST], capture_output=True, text=True, timeout=8)
+        except Exception:  # noqa: BLE001
+            pass
+    if not _tcp_open():
+        return {"woke": False, "error": "TV unreachable over Wi-Fi - press the physical remote"}
+    if _wakefulness() == "Awake":
+        return {"woke": True, "already": True, "via": "probe"}
+    _adb_direct(["shell", "input", "keyevent", "82"])
+    await asyncio.sleep(0.9)
+    _adb_direct(["shell", "input", "keyevent", "3"])
+    await asyncio.sleep(1.5)
+    for _ in range(5):
+        if _tcp_open() and _wakefulness() == "Awake":
+            return {"woke": True, "via": "keyevents"}
+        await asyncio.sleep(1.4)
+    return {"woke": False, "error": "TV did not wake from ADB - press the physical remote"}
 
 
 @router.post("/power")
 async def power(body: PowerBody) -> dict:
-    if not _read_flags().get("powerAllow"):
-        return {"ok": False, "error": "power toggle not enabled"}
-    if body.action not in ("off", "on"):
-        return {"ok": False, "error": "action must be off|on"}
-    service = "turn_off" if body.action == "off" else "turn_on"
-    status, _ = _ha(
-        f"/api/services/switch/{service}", {"entity_id": TV_PLUG_ENTITY}, timeout=10
-    )
-    return {"ok": status == 200, "action": body.action}
+    action = (body.action or "toggle").lower()
+    status, data = _ha(f"/api/states/{FIRETV_ENTITY}", timeout=8)
+    state = data.get("state", "") if status == 200 and isinstance(data, dict) else ""
+    if action == "toggle":
+        action = _power_direction(state)
+    if action not in ("on", "off"):
+        return {"ok": False, "error": "action must be toggle|on|off"}
+
+    if body.dry_run:
+        return {"ok": True, "dry_run": True, "action": action, "state": state}
+
+    if action == "on":
+        res = await _wake_tv()
+        if res.get("woke"):
+            detail = "TV already on" if res.get("already") else "TV on"
+            return {"ok": True, "action": "on", "woke": True, "detail": detail}
+        return {"ok": False, "action": "on", "error": res.get("error", "wake failed")}
+
+    # off: graceful standby, parity with the HA card's power button
+    res = _media_service("turn_off")
+    via = "ha"
+    if not res.get("ok") and _adb_direct(["shell", "input", "keyevent", "223"]):
+        via = "adb"
+        res = {"ok": True}
+    if not res.get("ok"):
+        return {"ok": False, "action": "off", "error": "turn_off failed - TV unreachable?"}
+    for _ in range(4):
+        await asyncio.sleep(1.3)
+        if not _tcp_open() or _wakefulness() in ("Asleep", "Dozing"):
+            return {"ok": True, "action": "off", "slept": True, "detail": "TV off", "via": via}
+    return {"ok": True, "action": "off", "slept": False, "detail": "Sleep sent", "via": via}

@@ -1,7 +1,7 @@
 /**
  * TV Remote - Fire TV controls in the desktop app statusbar.
  * Chip: transport pill + ▾ handle. Click ▾ opens the remote dialog
- * (progress bar + full button pad). Backend on nitro via ctx.rest.
+ * (progress bar + full button pad + power). Backend on nitro via ctx.rest.
  */
 import {
   Dialog,
@@ -48,18 +48,43 @@ function TvChip({ ctx }) {
     }
   }
 
+  const powerPress = async () => {
+    haptic('tap')
+    try {
+      const j = await ctx.rest('/power', {
+        method: 'POST',
+        body: { action: 'toggle' },
+        timeoutMs: 25000
+      })
+      if (j.ok) host.notify({ kind: 'success', message: j.detail || 'TV power toggled' })
+      else host.notify({ kind: 'error', message: j.error || j.detail || 'TV power failed' })
+    } catch {
+      host.notify({ kind: 'error', message: 'TV backend unreachable' })
+    }
+  }
+
   const stText = prog && prog.ok
     ? (prog.playing ? '▶ Playing' : prog.paused ? '⏸ Paused' : '⏹ Idle')
     : 'TV'
 
+  const btnCls =
+    'inline-flex h-10 w-full items-center justify-center rounded-lg border border-(--ui-stroke-secondary) ' +
+    'bg-(--ui-surface-secondary) text-base text-(--ui-text-secondary) ' +
+    'hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
+
   const btn = (label, action) => jsx('button', {
     type: 'button',
     onClick: () => press(action),
-    className:
-      'inline-flex h-10 w-full items-center justify-center rounded-lg border border-(--ui-stroke-secondary) ' +
-      'bg-(--ui-surface-secondary) text-base text-(--ui-text-secondary) ' +
-      'hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none',
+    className: btnCls,
     children: label
+  })
+
+  const powerBtn = jsx('button', {
+    type: 'button',
+    onClick: powerPress,
+    title: 'Power on / off',
+    className: btnCls,
+    children: '⏻'
   })
 
   const segCls =
@@ -140,7 +165,7 @@ function TvChip({ ctx }) {
                 children: [
                   btn('⏮', 'prev'), btn('⏯', 'play_pause'), btn('⏭', 'next'), btn('⏹', 'stop'),
                   btn('−', 'vol_down'), btn('🔇', 'mute'), btn('+', 'vol_up'), btn('↩', 'back'),
-                  btn('⌂', 'home'), jsx('div', {}), jsx('div', {}), jsx('div', {})
+                  btn('⌂', 'home'), powerBtn, jsx('div', {}), jsx('div', {})
                 ]
               }),
               jsx('div', {

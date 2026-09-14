@@ -5,7 +5,7 @@ Desktop + dashboard plugins for the [Hermes Agent](https://github.com/NousResear
 ## Plugins
 
 ### tv-remote
-Fire TV remote in the desktop app statusbar: play/pause, volume ±, next track, plus a full pane with stop, mute, prev, back/home and a gated power toggle.
+Fire TV remote in the desktop app statusbar: play/pause, volume ±, next track, plus a dialog with stop, mute, prev, back/home and a power button. Power off is a graceful standby through the HA androidtv integration (the same call the HA card makes); power on wakes the TV with MENU + HOME ADB keyevents (plain POWER/WAKEUP keys do not wake this TV Edition).
 
 - `desktop/plugin.js` — statusbar chip (segmented pill) + remote pane
 - `dashboard/` — Python backend proxying Home Assistant (`media_player` + read-only ADB dumps for accurate playback state)
