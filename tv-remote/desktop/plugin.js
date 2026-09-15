@@ -87,6 +87,30 @@ function TvChip({ ctx }) {
     children: '⏻'
   })
 
+  const appBtnCls =
+    'inline-flex h-10 w-full items-center justify-center rounded-lg border border-(--ui-stroke-secondary) ' +
+    'bg-(--ui-surface-secondary) text-[0.6875rem] text-(--ui-text-secondary) ' +
+    'hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
+
+  const launchPress = async (action, name) => {
+    haptic('tap')
+    try {
+      const j = await ctx.rest('/press', { method: 'POST', body: { action }, timeoutMs: 25000 })
+      if (j.ok) host.notify({ kind: 'success', message: j.detail || `Opening ${name}` })
+      else host.notify({ kind: 'error', message: j.error || 'Launch failed' })
+    } catch {
+      host.notify({ kind: 'error', message: 'TV backend unreachable' })
+    }
+  }
+
+  const launchBtn = (label, action) => jsx('button', {
+    type: 'button',
+    onClick: () => launchPress(action, label),
+    title: `Open ${label} on the TV`,
+    className: appBtnCls,
+    children: label
+  })
+
   const segCls =
     'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
     'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
@@ -132,7 +156,7 @@ function TvChip({ ctx }) {
         children: [
           btn('⏮', 'prev'), btn('⏯', 'play_pause'), btn('⏭', 'next'), btn('⏹', 'stop'),
           btn('−', 'vol_down'), btn('🔇', 'mute'), btn('+', 'vol_up'), btn('↩', 'back'),
-          btn('⌂', 'home'), powerBtn, jsx('div', {}), jsx('div', {})
+          btn('⌂', 'home'), powerBtn, launchBtn('Stremio', 'launch_stremio'), launchBtn('SmartTube', 'launch_smarttube')
         ]
       }),
       jsx('div', {

@@ -6,7 +6,7 @@ Mounted at /api/plugins/tv-remote/ by the Hermes dashboard.
 Scope (v3): transport keys (play/pause, stop, volume, mute, next, prev),
 Back/Home via ADB keyevents, power on/off (standby via the HA media_player,
 wake via MENU + HOME ADB keyevents - the sequence verified on this TV),
-and a playback-progress sensor: live position is computed with the
+app launches (Stremio / SmartTube), and a playback-progress sensor: live position is computed with the
 Android playback math (position_at_last_event + speed * elapsed since
 `updated`), duration is resolved from the video title via yt-dlp, and
 the result is exposed as a percent + label for the desktop UI and for
@@ -189,6 +189,11 @@ MEDIA_SERVICES = {
     "next": "media_next_track",
     "prev": "media_previous_track",
     "stop": "media_stop",
+}
+
+LAUNCH_APPS = {
+    "launch_stremio": ("com.stremio.one", "Stremio"),
+    "launch_smarttube": ("org.smarttube.stable", "SmartTube"),
 }
 
 
@@ -380,6 +385,11 @@ async def press(body: PressBody) -> dict:
     if action in MEDIA_SERVICES:
         return _media_service(MEDIA_SERVICES[action])
 
+    # App launches: monkey via direct ADB (wakes the TV first if needed).
+    if action in LAUNCH_APPS:
+        pkg, label = LAUNCH_APPS[action]
+        return await _launch_app(pkg, label)
+
     return {"ok": False, "error": f"unknown action: {action}"}
 
 
@@ -471,6 +481,19 @@ async def _wake_tv() -> dict:
             return {"woke": True, "via": "keyevents"}
         await asyncio.sleep(1.4)
     return {"woke": False, "error": "TV did not wake from ADB - press the physical remote"}
+
+
+async def _launch_app(pkg: str, label: str) -> dict:
+    """Open an app on the TV (monkey); wake the TV first if it is asleep."""
+    if _wakefulness() != "Awake":
+        res = await _wake_tv()
+        if not res.get("woke"):
+            return {"ok": False, "error": res.get("error", "TV unreachable - cannot launch")}
+    if not _adb_direct(
+        ["shell", "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"], timeout=15
+    ):
+        return {"ok": False, "error": "launch failed - is the TV awake?"}
+    return {"ok": True, "detail": f"Opening {label}"}
 
 
 @router.post("/power")
