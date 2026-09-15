@@ -1,13 +1,13 @@
 /**
  * TV Remote - Fire TV controls in the desktop app statusbar.
- * Chip: transport pill + ▾ handle. Click ▾ opens the remote dialog
- * (progress bar + full button pad + power). Backend on nitro via ctx.rest.
+ * Chip: transport pill + ▾ handle. Click ▾ opens the remote panel as an
+ * attached popover (opens upward, right-aligned - the radio-plugin pattern),
+ * not a modal dialog. Backend on nitro via ctx.rest.
  */
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
   haptic,
   host
 } from '@hermes/plugin-sdk'
@@ -119,6 +119,29 @@ function TvChip({ ctx }) {
     ]
   })
 
+  const panel = jsxs('div', {
+    className: 'flex flex-col gap-3',
+    children: [
+      jsx('div', {
+        className: 'text-sm text-(--ui-text-secondary)',
+        children: stText
+      }),
+      progressBlock,
+      jsx('div', {
+        className: 'grid grid-cols-4 gap-2',
+        children: [
+          btn('⏮', 'prev'), btn('⏯', 'play_pause'), btn('⏭', 'next'), btn('⏹', 'stop'),
+          btn('−', 'vol_down'), btn('🔇', 'mute'), btn('+', 'vol_up'), btn('↩', 'back'),
+          btn('⌂', 'home'), powerBtn, jsx('div', {}), jsx('div', {})
+        ]
+      }),
+      jsx('div', {
+        className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
+        children: 'Back/Home go through ADB - the TV must be awake.'
+      })
+    ]
+  })
+
   return jsxs('span', {
     className: 'inline-flex h-full items-center gap-1',
     children: [
@@ -132,49 +155,32 @@ function TvChip({ ctx }) {
           jsx('button', { type: 'button', className: segCls, onClick: () => press('vol_down'), children: '−' }),
           jsx('button', { type: 'button', className: segCls, onClick: () => press('vol_up'), children: '+' }),
           jsx('button', { type: 'button', className: segCls, onClick: () => press('next'), children: '⏭' }),
-          jsx('button', {
-            type: 'button',
-            onClick: () => setOpen(true),
-            title: 'TV remote - open controls',
-            className:
-              'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
-              'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
-              'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
-            children: '▾'
-          })
-        ]
-      }),
-      // remote dialog
-      jsx(Dialog, {
-        open,
-        onOpenChange: setOpen,
-        children: jsx(DialogContent, {
-          className: 'w-[min(72vw,380px)]',
-          children: jsxs('div', {
-            className: 'flex flex-col gap-4',
+          // ▾ handle - opens the remote panel (popover, not a modal)
+          jsxs(Popover, {
+            open,
+            onOpenChange: setOpen,
             children: [
-              jsx(DialogHeader, {
-                children: jsx(DialogTitle, {
-                  className: 'text-sm',
-                  children: stText
+              jsx(PopoverTrigger, {
+                asChild: true,
+                children: jsx('button', {
+                  type: 'button',
+                  title: 'TV remote - open controls',
+                  className:
+                    'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
+                    'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
+                    'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
+                  children: '▾'
                 })
               }),
-              progressBlock,
-              jsx('div', {
-                className: 'grid grid-cols-4 gap-2',
-                children: [
-                  btn('⏮', 'prev'), btn('⏯', 'play_pause'), btn('⏭', 'next'), btn('⏹', 'stop'),
-                  btn('−', 'vol_down'), btn('🔇', 'mute'), btn('+', 'vol_up'), btn('↩', 'back'),
-                  btn('⌂', 'home'), powerBtn, jsx('div', {}), jsx('div', {})
-                ]
-              }),
-              jsx('div', {
-                className: 'text-[0.6875rem] text-(--ui-text-quaternary)',
-                children: 'Back/Home go through ADB - the TV must be awake.'
+              jsx(PopoverContent, {
+                side: 'top',
+                align: 'end',
+                'aria-label': 'TV remote',
+                children: panel
               })
             ]
           })
-        })
+        ]
       })
     ]
   })
