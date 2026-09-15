@@ -1,15 +1,19 @@
 /**
  * TV Remote - Fire TV controls in the desktop app statusbar.
- * Chip: transport pill + ▾ handle. Click ▾ opens the remote panel as an
+ * Chip: play/pause + panel handle. Click the chevron to open the remote panel as an
  * attached popover (opens upward, right-aligned - the radio-plugin pattern),
  * not a modal dialog. Backend on nitro via ctx.rest.
  */
 import {
+  Button,
   Popover,
   PopoverContent,
   PopoverTrigger,
+  Separator,
+  Tip,
   haptic,
-  host
+  host,
+  icons
 } from '@hermes/plugin-sdk'
 import { jsx, jsxs } from 'react/jsx-runtime'
 import { useEffect, useState } from 'react'
@@ -68,33 +72,10 @@ function TvChip({ ctx }) {
   }
 
   const stText = prog && prog.ok
-    ? (prog.playing ? '▶ Playing' : prog.paused ? '⏸ Paused' : '⏹ Idle')
+    ? (prog.playing ? 'Playing' : prog.paused ? 'Paused' : 'Idle')
     : 'TV'
 
-  const btnCls =
-    'inline-flex h-10 w-full items-center justify-center rounded-lg border border-(--ui-stroke-secondary) ' +
-    'bg-(--ui-surface-secondary) text-base text-(--ui-text-secondary) ' +
-    'hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
-
-  const btn = (label, action) => jsx('button', {
-    type: 'button',
-    onClick: () => press(action),
-    className: btnCls,
-    children: label
-  })
-
-  const powerBtn = jsx('button', {
-    type: 'button',
-    onClick: powerPress,
-    title: 'Power on / off',
-    className: btnCls,
-    children: '⏻'
-  })
-
-  const appBtnCls =
-    'inline-flex h-10 w-full items-center justify-center rounded-lg border border-(--ui-stroke-secondary) ' +
-    'bg-(--ui-surface-secondary) text-[0.6875rem] text-(--ui-text-secondary) ' +
-    'hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
+  const ppIcon = prog && prog.ok && prog.playing ? icons.Pause : icons.Play
 
   const launchPress = async (action, name) => {
     haptic('tap')
@@ -107,22 +88,34 @@ function TvChip({ ctx }) {
     }
   }
 
-  const launchBtn = (label, action, icon) => jsx('button', {
-    type: 'button',
-    onClick: () => launchPress(action, label),
-    title: `Open ${label} on the TV`,
-    className: appBtnCls,
-    children: jsx('img', {
-      src: `data:image/png;base64,${icon}`,
-      alt: label,
-      draggable: false,
-      className: 'h-6 w-6'
+  // Icon control button with a tooltip (the app's Button + Tabler icons).
+  const ctl = (tip, onClick, IconCmp, opts) => jsx(Tip, {
+    label: tip,
+    children: jsx(Button, {
+      variant: opts && opts.primary ? 'secondary' : 'ghost',
+      size: 'icon',
+      'aria-label': tip,
+      onClick,
+      children: jsx(IconCmp, { className: opts && opts.flip ? 'size-4 rotate-180' : 'size-4' })
     })
   })
 
-  const segCls =
-    'inline-flex items-center justify-center min-w-8 px-2.5 py-1 my-0.5 text-[0.6875rem] leading-none ' +
-    'text-(--ui-text-secondary) hover:bg-(--chrome-action-hover) hover:text-foreground transition-colors select-none'
+  // App launcher: brand icon in a soft button.
+  const appBtn = (name, action, icon) => jsx(Tip, {
+    label: `Open ${name}`,
+    children: jsx(Button, {
+      variant: 'secondary',
+      'aria-label': `Open ${name} on the TV`,
+      className: 'h-9 w-full',
+      onClick: () => launchPress(action, name),
+      children: jsx('img', {
+        src: `data:image/png;base64,${icon}`,
+        alt: name,
+        draggable: false,
+        className: 'size-7'
+      })
+    })
+  })
 
   const progressBlock = prog && prog.ok && (prog.playing || prog.paused) && jsxs('div', {
     className: 'flex flex-col gap-1.5',
@@ -160,12 +153,42 @@ function TvChip({ ctx }) {
         children: stText
       }),
       progressBlock,
-      jsx('div', {
-        className: 'grid grid-cols-4 gap-2',
+      jsxs('div', {
+        className: 'grid grid-cols-4 justify-items-center gap-1.5',
         children: [
-          btn('⏮', 'prev'), btn('⏯', 'play_pause'), btn('⏭', 'next'), btn('⏹', 'stop'),
-          btn('−', 'vol_down'), btn('🔇', 'mute'), btn('+', 'vol_up'), btn('↩', 'back'),
-          btn('⌂', 'home'), powerBtn, launchBtn('Stremio', 'launch_stremio', ICON_STREMIO), launchBtn('SmartTube', 'launch_smarttube', ICON_SMARTTUBE)
+          ctl('Previous', () => press('prev'), icons.ChevronLeft),
+          ctl('Play / Pause', () => press('play_pause'), ppIcon, { primary: true }),
+          ctl('Next', () => press('next'), icons.ChevronRight),
+          ctl('Stop', () => press('stop'), icons.StopFilled)
+        ]
+      }),
+      jsxs('div', {
+        className: 'flex items-center justify-between',
+        children: [
+          jsxs('div', {
+            className: 'flex items-center gap-1.5',
+            children: [
+              ctl('Volume down', () => press('vol_down'), icons.ChevronDown),
+              ctl('Mute', () => press('mute'), icons.VolumeX),
+              ctl('Volume up', () => press('vol_up'), icons.ChevronDown, { flip: true })
+            ]
+          }),
+          jsxs('div', {
+            className: 'flex items-center gap-1.5',
+            children: [
+              ctl('Back', () => press('back'), icons.CornerDownLeft),
+              ctl('Home', () => press('home'), icons.LayoutDashboard),
+              ctl('Power on / off', powerPress, icons.Power)
+            ]
+          })
+        ]
+      }),
+      jsx(Separator, {}),
+      jsxs('div', {
+        className: 'grid grid-cols-2 gap-2',
+        children: [
+          appBtn('Stremio', 'launch_stremio', ICON_STREMIO),
+          appBtn('SmartTube', 'launch_smarttube', ICON_SMARTTUBE)
         ]
       }),
       jsx('div', {
@@ -178,28 +201,34 @@ function TvChip({ ctx }) {
   return jsxs('span', {
     className: 'inline-flex h-full items-center gap-1',
     children: [
-      // pill: play/pause + ▾ handle - everything else lives in the panel
+      // pill: play/pause + panel handle - everything else lives in the panel
       jsx('span', {
         className:
-          'inline-flex items-stretch rounded-full border border-(--ui-stroke-tertiary) ' +
-          'bg-(--ui-surface-secondary) overflow-hidden shadow-sm',
+          'inline-flex items-center gap-0.5 rounded-full border border-(--ui-stroke-tertiary) ' +
+          'bg-(--ui-surface-secondary) px-0.5 py-0.5 shadow-sm',
         children: [
-          jsx('button', { type: 'button', className: segCls, onClick: () => press('play_pause'), children: '⏯' }),
-          // ▾ handle - opens the remote panel (popover, not a modal)
+          jsx(Tip, {
+            label: 'Play / Pause',
+            children: jsx(Button, {
+              variant: 'ghost',
+              size: 'icon-xs',
+              'aria-label': 'Play / Pause',
+              onClick: () => press('play_pause'),
+              children: jsx(ppIcon, { className: 'size-3' })
+            })
+          }),
+          // chevron handle - opens the remote panel (popover, not a modal)
           jsxs(Popover, {
             open,
             onOpenChange: setOpen,
             children: [
               jsx(PopoverTrigger, {
                 asChild: true,
-                children: jsx('button', {
-                  type: 'button',
-                  title: 'More options',
-                  className:
-                    'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
-                    'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
-                    'transition-colors select-none border-l border-(--ui-stroke-tertiary)',
-                  children: '▾'
+                children: jsx(Button, {
+                  variant: 'ghost',
+                  size: 'icon-xs',
+                  'aria-label': 'More options',
+                  children: jsx(icons.ChevronDown, { className: 'size-3' })
                 })
               }),
               jsx(PopoverContent, {
