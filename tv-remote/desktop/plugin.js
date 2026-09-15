@@ -145,16 +145,13 @@ function TvChip({ ctx }) {
   return jsxs('span', {
     className: 'inline-flex h-full items-center gap-1',
     children: [
-      // transport pill
+      // pill: play/pause + ▾ handle - everything else lives in the panel
       jsx('span', {
         className:
           'inline-flex items-stretch rounded-full border border-(--ui-stroke-tertiary) ' +
           'bg-(--ui-surface-secondary) overflow-hidden shadow-sm',
         children: [
           jsx('button', { type: 'button', className: segCls, onClick: () => press('play_pause'), children: '⏯' }),
-          jsx('button', { type: 'button', className: segCls, onClick: () => press('vol_down'), children: '−' }),
-          jsx('button', { type: 'button', className: segCls, onClick: () => press('vol_up'), children: '+' }),
-          jsx('button', { type: 'button', className: segCls, onClick: () => press('next'), children: '⏭' }),
           // ▾ handle - opens the remote panel (popover, not a modal)
           jsxs(Popover, {
             open,
@@ -164,7 +161,7 @@ function TvChip({ ctx }) {
                 asChild: true,
                 children: jsx('button', {
                   type: 'button',
-                  title: 'TV remote - open controls',
+                  title: 'More options',
                   className:
                     'inline-flex items-center justify-center min-w-6 px-1.5 text-[0.6875rem] ' +
                     'text-(--ui-text-tertiary) hover:bg-(--chrome-action-hover) hover:text-foreground ' +
